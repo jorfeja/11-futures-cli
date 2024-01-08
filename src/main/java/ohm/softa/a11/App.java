@@ -2,13 +2,15 @@ package ohm.softa.a11;
 
 import ohm.softa.a11.openmensa.OpenMensaAPI;
 import ohm.softa.a11.openmensa.OpenMensaAPIService;
+import ohm.softa.a11.openmensa.model.Canteen;
+import ohm.softa.a11.openmensa.model.PageInfo;
+import retrofit2.Response;
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.util.Calendar;
-import java.util.Date;
-import java.util.Locale;
-import java.util.Scanner;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.stream.IntStream;
 
 /**
@@ -49,18 +51,59 @@ public class App {
 		} while (true);
 	}
 
-	private static void printCanteens() {
+	private static <ComparableFuture> void printCanteens() {
 		System.out.print("Fetching canteens [");
 		/* TODO fetch all canteens and print them to STDOUT
 		 * at first get a page without an index to be able to extract the required pagination information
 		 * afterwards you can iterate the remaining pages
 		 * keep in mind that you should await the process as the user has to select canteen with a specific id */
+
+		var openMensaAPI = OpenMensaAPIService.getInstance().getOpenMensaAPI();
+
+		System.out.println("\nGetting canteens.");
+
+		openMensaAPI.getCanteens().thenApplyAsync(resp -> {
+			if (!resp.isSuccessful()) {
+				throw new RuntimeException("Request error: " + resp.code());
+			}
+			PageInfo pageInfo = PageInfo.extractFromResponse(resp);
+
+			CompletableFuture<List<Canteen>> chain = null;
+			for (int i = 1; i <= pageInfo.getTotalCountOfPages(); i++) {
+				if (chain == null)
+					chain = openMensaAPI.getCanteens(i);
+				else {
+					chain.thenCombine(openMensaAPI.getCanteens(i), (x1, x2) -> {
+						x1.addAll(x2);
+						return x1;
+					});
+				}
+			}
+
+			// Chain ist das gesammelte Future
+			return chain;
+		}).thenAccept(xs -> {
+			try {
+				List<Canteen> list = xs.get();
+				for (Canteen c : list) {
+					System.out.println(c.getId() + " " + c.getName());
+				}
+			} catch (InterruptedException e) {
+				throw new RuntimeException(e);
+			} catch (ExecutionException e) {
+				throw new RuntimeException(e);
+			}
+		});
 	}
 
 	private static void printMeals() {
 		/* TODO fetch all meals for the currently selected canteen
 		 * to avoid errors retrieve at first the state of the canteen and check if the canteen is opened at the selected day
 		 * don't forget to check if a canteen was selected previously! */
+		System.out.println("Getting meals for canteen " + currentCanteenId + " and date " + currentDate);
+		var meals = OpenMensaAPIService.getInstance().getOpenMensaAPI().getMeals(currentCanteenId, currentDate.toString()).join();
+
+		System.out.println("Meals: " + meals);
 	}
 
 	/**
@@ -88,7 +131,7 @@ public class App {
 		boolean readDate = false;
 		do {
 			try {
-				System.out.println("Pleae enter date in the format yyyy-mm-dd:");
+				System.out.println("Please enter date in the format yyyy-mm-dd:");
 				Date d = dateFormat.parse(inputScanner.next());
 				currentDate.setTime(d);
 				readDate = true;
